@@ -1,4 +1,4 @@
-﻿# dsh-tray-launcher
+# dsh-tray-launcher
 # 以系统托盘方式运行 DeepSeek Harness (dsh web)：无窗口、托盘图标管理、端口就绪自动开浏览器。
 #
 # 托盘模式   : powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File tray.ps1
@@ -136,7 +136,7 @@ if (-not $bin) {
 }
 
 # ---- 托盘模式 ----
-$script:TrayVersion = '1.4.0'
+$script:TrayVersion = '1.5.0'
 try {
     $pk = Join-Path $PSScriptRoot 'package.json'
     if (Test-Path $pk) { $pv = (Get-Content $pk -Raw | ConvertFrom-Json).version }
@@ -158,6 +158,15 @@ try {
 '@
     [Win32.K32Win]::ShowWindow([Win32.K32Win]::GetConsoleWindow(), 0) | Out-Null
     [Win32.K32Win]::FreeConsole() | Out-Null
+} catch {}
+
+# 工作集回收用的 P/Invoke（与上面分开声明：即使控制台隐藏那段被策略禁用，
+# 内存回收仍可用；反之亦然）。
+try {
+    Add-Type -Name K32Mem -Namespace Win32 -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern IntPtr GetCurrentProcess();
+[DllImport("psapi.dll")] public static extern bool EmptyWorkingSet(IntPtr hProcess);
+'@
 } catch {}
 
 # 兜底：若仍持有控制台（Add-Type 被策略禁用 / 隐藏失败），用 CreateNoWindow
@@ -190,12 +199,32 @@ function Write-TrayLog($msg) {
     Add-Content -Path $trayLog -Value $line -Encoding UTF8
 }
 
+# ---- 界面地址解析 ----
+# 新版 dsh web（≥0.1.7）给 Web UI 加了鉴权：只有带 `?token=` 的地址能直接打开，
+# 用裸地址会被要求“reopen the URL printed by dsh web”。托盘从 harness 的 stdout
+# 日志里取最后一次打印的带 token 地址；取不到（旧版 harness）再退回配置里的 url。
+$script:harnessUrl = $null
+function Get-HarnessUrl {
+    if ($script:harnessUrl) { return $script:harnessUrl }
+    try {
+        if (Test-Path $outLog) {
+            $m = Select-String -Path $outLog -Pattern 'dsh web:\s+(https?://\S+)' -AllMatches -ErrorAction SilentlyContinue |
+                Select-Object -Last 1
+            if ($m) {
+                $u = $m.Matches[$m.Matches.Count - 1].Groups[1].Value.Trim()
+                if ($u -match '^https?://') { $script:harnessUrl = $u; return $u }
+            }
+        }
+    } catch {}
+    return $url
+}
+
 # 单实例保护：托盘只允许一个
 $createdNew = $null
 $mutex = New-Object System.Threading.Mutex($true, 'Global\dsh-tray-launcher', [ref]$createdNew)
 if (-not $createdNew) {
     Write-TrayLog 'another tray instance is running; opening UI and exiting'
-    if (-not $NoOpen) { Start-Process $url }
+    if (-not $NoOpen) { Start-Process (Get-HarnessUrl) }
     exit 0
 }
 Write-TrayLog 'tray launcher started'
@@ -681,27 +710,59 @@ $miExit = $menu.Items.Add('退出')
 $tray.ContextMenuStrip = $menu
 Update-IconMenuChecks
 
-$miOpen.add_Click({ Start-Process $url })
+$miOpen.add_Click({ Start-Process (Get-HarnessUrl) })
 $miLog.add_Click({ Start-Process notepad $outLog })
+
+# ---- 端口探测（纯 .NET，避免加载 NetTCPIP/CIM 模块）----
+# 实测：Import-Module NetTCPIP 会让常驻内存 +29MB；托盘每 3 秒轮询一次，
+# 用 TcpClient 直连判断端口就绪，既不加载模块也不产生 CIM 对象。
+function Test-PortOpen([int]$Port = 3080) {
+    $client = $null
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne(300) -and $client.Connected) { return $true }
+        return $false
+    } catch {
+        return $false
+    } finally {
+        if ($client) { try { $client.Close() } catch {} }
+    }
+}
+
+# ---- 内存回收（GC + 回收工作集）----
+# PowerShell 5.1 + WinForms 基线约 75MB，托盘逻辑再叠几十 MB。定期 GC 并把
+# 工作集还给系统，让常驻占用回落到实际在用的页（任务管理器读数显著下降）。
+function Invoke-MemoryTrim {
+    try {
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
+        [System.GC]::Collect()
+        [void][Win32.K32Mem]::EmptyWorkingSet([Win32.K32Mem]::GetCurrentProcess())
+    } catch {}
+}
 
 # ---- 停止 Harness（端口占用者 + 命令行含 dsh 的 node 进程）----
 function Stop-Harness {
     $pids = @()
-    try {
-        $owner = Get-NetTCPConnection -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue |
-            Select-Object -First 1 -ExpandProperty OwningProcess
-        if ($owner) { $pids += $owner }
-    } catch {}
-    try {
-        $dshProcs = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
-            Where-Object { $_.CommandLine -match 'dsh' } |
-            Select-Object -ExpandProperty ProcessId
-        $pids += $dshProcs
-    } catch {}
+    # 托盘自己拉起的 harness：优先用进程句柄，避免任何模块加载
+    if ($script:spawned -and $script:proc) {
+        try { if (-not $script:proc.HasExited) { $pids += $script:proc.Id } } catch {}
+    }
+    if ($pids.Count -eq 0) {
+        # 外部启动的 harness：才走 CIM 查端口占用者（低频路径）
+        try {
+            $dshProcs = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
+                Where-Object { $_.CommandLine -match 'dsh' } |
+                Select-Object -ExpandProperty ProcessId
+            $pids += $dshProcs
+        } catch {}
+    }
     $pids | Where-Object { $_ } | Sort-Object -Unique | ForEach-Object {
         Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue
     }
     Write-TrayLog 'stop requested'
+    Invoke-MemoryTrim
 }
 
 $miExit.add_Click({
@@ -711,7 +772,7 @@ $miExit.add_Click({
     $tray.Visible = $false
     [System.Windows.Forms.Application]::Exit()
 })
-$tray.add_DoubleClick({ Start-Process $url })
+$tray.add_DoubleClick({ Start-Process (Get-HarnessUrl) })
 
 # ---- 启动 harness 进程（CreateNoWindow：从 API 层面禁止控制台）----
 function Start-HarnessProcess {
@@ -733,7 +794,7 @@ function Start-HarnessProcess {
 $script:spawned = $false
 $script:proc = $null
 
-$already = Get-NetTCPConnection -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
+$already = Test-PortOpen 3080
 if ($already) {
     Write-TrayLog 'harness already listening on 3080; tray attached'
     $tray.BalloonTipTitle = 'DeepSeek Harness'
@@ -773,14 +834,18 @@ try {
 
 # ---- 轮询：端口就绪后打开浏览器；监视退出 ----
 $script:opened = $false
+$script:tick = 0
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 3000
 $timer.add_Tick({
+    $script:tick += 1
+    # 每 20 个 tick（约 1 分钟）回收一次工作集：长跑进程的消息循环 + 轮询会产生
+    # 大量短命对象，定期 GC + EmptyWorkingSet 能把常驻读数压回实际在用的量。
+    if ($script:tick % 20 -eq 0) { Invoke-MemoryTrim }
     if (-not $NoOpen -and -not $script:opened) {
-        $l = Get-NetTCPConnection -LocalPort 3080 -State Listen -ErrorAction SilentlyContinue
-        if ($l) {
+        if (Test-PortOpen 3080) {
             $script:opened = $true
-            Start-Process $url
+            Start-Process (Get-HarnessUrl)
             Write-TrayLog 'browser opened'
         }
     }
@@ -817,6 +882,8 @@ $timer.add_Tick({
     }
 })
 $timer.Start()
+# 启动完成即回收一次：WinForms + 图标加载后是常驻内存的峰值点
+Invoke-MemoryTrim
 
 # ---- 消息循环 ----
 [System.Windows.Forms.Application]::Run()
