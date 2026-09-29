@@ -1,0 +1,23 @@
+name: test
+
+# 托盘由 Windows PowerShell 5.1 启动：无 BOM 的 UTF-8 .ps1 会被按 ANSI(GBK) 解码，
+# 中文乱码 + 语法解析失败 → 托盘静默起不来。v1.5.0 曾因此发布过坏包，故用 CI 钉住编码。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  encoding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: PowerShell scripts must carry a UTF-8 BOM
+        run: npm test

@@ -1,4 +1,4 @@
-# dsh-tray-launcher
+﻿# dsh-tray-launcher
 # 以系统托盘方式运行 DeepSeek Harness (dsh web)：无窗口、托盘图标管理、端口就绪自动开浏览器。
 #
 # 托盘模式   : powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File tray.ps1
