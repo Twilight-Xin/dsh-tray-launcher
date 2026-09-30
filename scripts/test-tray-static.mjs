@@ -45,9 +45,12 @@ check("自更新不碰 Harness 日志", selfCmd.every((l) => !l.includes("$outLo
 const pluginCmd = lineWith(tray, "plugin --profile web add");
 check("插件注册写专属日志表", tray.includes("pluginLogs") && tray.includes(">> \"' + $logs.Out + '\" 2>> \"' + $logs.Err"));
 check("插件注册不碰 Harness 日志", pluginCmd.every((l) => !l.includes("$outLog") && !l.includes("$errLog")));
-// Harness 自身的启动命令仍然把输出写进 dsh-out.log / dsh-err.log（那两份锁由它自己持有）
-const harnessCmd = lineWith(tray, `web >> "`);
+// Harness 自身的启动命令仍然把输出写进 dsh-out.log / dsh-err.log（那两份锁由它自己持有），
+// 且必须带 --no-open：dsh web 默认自己开一次浏览器，托盘还会开一次，叠加就是"启动时
+// 同时弹出多个浏览器界面"——统一由托盘开且只开一次。
+const harnessCmd = lineWith(tray, `web' + $openArg + ' >> "`);
 check("Harness 启动仍写自己的日志", harnessCmd.some((l) => l.includes("$outLog") && l.includes("$errLog")));
+check("Harness 启动带 --no-open（dsh 不再自开浏览器）", harnessCmd.some((l) => l.includes("$openArg")) && tray.includes("$openArg = ' --no-open'"));
 check("失败气泡回显真实报错", tray.includes("Get-LogTail $updateErrLog"));
 check("没有阻塞消息循环的 WaitForExit()", !tray.includes("$p.WaitForExit()"));
 check("更新用定时器异步等待", tray.includes("$script:waitTimer.Start()"));
@@ -106,6 +109,27 @@ check("托盘菜单有卸载项", tray.includes("'卸载用量仪表'") && tray.
 check("托盘卸载注销后清空配置版本", tray.includes("Save-CfgValue 'pluginVersion' ''"));
 check("uninstall.ps1 会注销插件", read("uninstall.ps1").includes("plugin --profile") && read("uninstall.ps1").includes("remove dsh-plugin-usage-meter"));
 check("uninstall.ps1 支持 -KeepUsageMeter", read("uninstall.ps1").includes("[switch]$KeepUsageMeter"));
+
+// 8) 窗口去重 / 重启静默 / 托盘图标自愈（v1.5.4）
+const pluginJs = read("src/plugin.js");
+const mutexChunk = tray.slice(tray.indexOf("$createdNew = $null"), tray.indexOf("Write-TrayLog 'tray launcher started'"));
+check("互斥冲突分支静默退出不开浏览器", mutexChunk.includes("exiting silently") && !mutexChunk.includes("Start-Process"));
+const restartChunk = tray.slice(tray.indexOf("$miRestart.add_Click"), tray.indexOf("$sepR ="));
+check("重启 Harness 不再重置 opened（不自动开界面）", restartChunk.length > 0 && !restartChunk.includes("$script:opened = $false"));
+check("重启前等端口释放再拉新 harness", restartChunk.includes("Test-PortOpen $script:webPort") && restartChunk.includes("released after"));
+const stopChunk = tray.slice(tray.indexOf("function Stop-Harness"), tray.indexOf("$miExit.add_Click"));
+check("停止 harness 追杀端口监听者（GetExtendedTcpTable，不留 node 孤儿）", stopChunk.includes("FindListenerPid($script:webPort)") && stopChunk.includes("Stop-Process -Id $target -Force"));
+check("CIM 按 bin 路径找 harness node（不误杀无关进程）", stopChunk.includes("[regex]::Escape($bin)"));
+check("PortOwner C# 就绪（GetExtendedTcpTable）", tray.includes("GetExtendedTcpTable") && tray.includes("port owner query armed"));
+check("优雅退出固定 exit 0", tray.trimEnd().endsWith("exit 0"));
+const tickChunk = tray.slice(tray.indexOf("$timer.add_Tick"), tray.indexOf("$timer.Start()"));
+check("端口被外部 harness 抢占时转挂靠不退出", tickChunk.includes("attaching to external harness"));
+check("旧版 dsh 秒退时摘掉 --no-open 重试一次", tickChunk.includes("retrying without --no-open"));
+check("监听 TaskbarCreated 自愈托盘图标", tray.includes('RegisterWindowMessage("TaskbarCreated")') && tray.includes("tray icon re-registered"));
+check("UI 线程异常不弹窗卡死托盘", tray.includes("add_ThreadException") && tray.includes("UnhandledExceptionMode]::CatchException"));
+check("插件拉起托盘带 -NoOpen", pluginJs.includes('"-NoOpen"'));
+check("托盘异常退出时插件自动重启", pluginJs.includes("if (code === 0) return;") && pluginJs.includes("attempts > 5"));
+check("dispose 后停止重启", pluginJs.includes("disposed = true"));
 
 if (failed > 0) {
   console.error(`\n${failed} 项静态检查未通过`);

@@ -43,6 +43,9 @@ function Get-CfgValue($name, $default) {
 
 $url = Get-CfgValue 'url' 'http://127.0.0.1:3080'
 $cwd = Get-CfgValue 'cwd' $env:USERPROFILE
+# Web 端口：从配置 url 里解析（杀 3080 监听者、重启前等端口都用它；缺省 3080）
+$script:webPort = 3080
+if ($url -match '://[^/]+:(\d+)') { $script:webPort = [int]$Matches[1] }
 
 # ---- 定位 node.exe ----
 # 优先系统正式安装的 node：codex 等工具链的 node 可能是转发桩，
@@ -143,7 +146,7 @@ if (-not $bin) {
 # ---- 托盘模式 ----
 # 版本号优先读部署目录里的 package.json（install.ps1 会一并拷贝；npm 全局包目录本来就有）。
 # 读不到（远程安装/手工拷贝的单文件部署）才退回下面这个硬编码值——发版时记得一起改。
-$script:TrayVersion = '1.5.3'
+$script:TrayVersion = '1.5.5'
 function Get-PackageVersion($dir) {
     if (-not $dir) { return '' }
     $pk = Join-Path $dir 'package.json'
@@ -288,8 +291,10 @@ if (-not $createdNew) {
     if ($abandoned) {
         Write-TrayLog 'previous tray instance was killed abruptly; taking over'
     } else {
-        Write-TrayLog 'another tray instance is running; opening UI and exiting'
-        if (-not $NoOpen) { Start-Process (Get-HarnessUrl) }
+        # 已有实例在跑（连点两次快捷方式 / 自启与插件同时拉起）：静默退出。
+        # 这里绝不能再开浏览器——持有托盘的那个实例会在端口就绪后开且只开一次，
+        # 本分支再开一次就是"启动时同时弹出多个浏览器界面"的来源之一。
+        Write-TrayLog 'another tray instance is running; exiting silently'
         exit 0
     }
 }
@@ -297,6 +302,16 @@ Write-TrayLog 'tray launcher started'
 Write-TrayLog ('dsh-tray-launcher version: ' + $script:TrayVersion)
 Write-TrayLog ('node: ' + $node)
 Write-TrayLog ('dsh bin: ' + $bin)
+
+# UI 线程兜底：菜单/定时器回调里的未处理异常默认会弹 ThreadExceptionDialog（模态、
+# 托盘像死了一样只能杀进程）。接住、记日志、继续跑——长跑托盘不能被单个回调拖死。
+try {
+    [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
+    [System.Windows.Forms.Application]::add_ThreadException({
+        param($sender, $e)
+        Write-TrayLog ('ui thread exception: ' + $e.Exception.Message)
+    })
+} catch { }
 
 # ---- 托盘图标与菜单 ----
 $script:PresetIcons = @{
@@ -968,15 +983,26 @@ $menu.Items.Add($script:miSelf) | Out-Null
 $miRestart = $menu.Items.Add('重启 Harness')
 $miRestart.add_Click({
     Write-TrayLog 'restart requested'
+    $tray.BalloonTipTitle = 'DeepSeek Harness'
+    $tray.BalloonTipText = '正在重启…'
+    $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+    $tray.ShowBalloonTip(2000)
     Stop-Harness
-    Start-Sleep -Seconds 2
+    # 等端口真正释放再拉新的：杀树后监听socket关闭有一瞬间，不等的话新 harness
+    # 会 EADDRINUSE 秒退（旧版托盘还跟着退出丢图标）。10s 超时后照样尝试，真有
+    # 残留也只是转挂靠模式，托盘不退。
+    $waited = 0
+    while ((Test-PortOpen $script:webPort) -and ($waited -lt 10000)) {
+        Start-Sleep -Milliseconds 250
+        $waited += 250
+    }
+    if ($waited -gt 0) { Write-TrayLog ('port ' + $script:webPort + ' released after ' + $waited + ' ms') }
+    Start-Sleep -Milliseconds 500
     try {
         Start-HarnessProcess
-        $script:opened = $false   # 端口就绪后重新打开浏览器
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '正在重启…'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-        $tray.ShowBalloonTip(2000)
+        # 重启不再自动弹浏览器：$script:opened 保持不变（平时已是 true），
+        # dsh 侧也用 --no-open 关掉了它自己的打开动作。想开界面：双击托盘图标或菜单"打开界面"。
+        Write-TrayLog 'restart completed'
     } catch {
         Write-TrayLog ('restart failed: ' + $_.Exception.Message)
         $tray.BalloonTipTitle = 'DeepSeek Harness'
@@ -996,6 +1022,122 @@ Update-IconMenuChecks
 
 $miOpen.add_Click({ Start-Process (Get-HarnessUrl) })
 $miLog.add_Click({ Start-Process notepad $outLog })
+
+# ---- 托盘图标自愈：任务栏重建后自动重新注册 ----
+# explorer 崩溃/重启会重建任务栏并广播 TaskbarCreated 消息；NotifyIcon 不处理它的话
+# 图标会永久消失（托盘进程和 harness 都活着，却只能手动重启托盘找回图标）。
+# 广播只投递给顶层窗口（message-only 窗口收不到），所以挂一个不可见的顶层窗口来接。
+$script:taskbarWatch = $null
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Windows.Forms;
+
+namespace DshTray
+{
+    public class TaskbarWatch : NativeWindow
+    {
+        public event EventHandler TaskbarRecreated;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern uint RegisterWindowMessage(string lpString);
+
+        private readonly uint _msg;
+
+        public TaskbarWatch()
+        {
+            _msg = RegisterWindowMessage("TaskbarCreated");
+            CreateHandle(new CreateParams());
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (_msg != 0 && (uint)m.Msg == _msg)
+            {
+                EventHandler handler = TaskbarRecreated;
+                if (handler != null) handler(this, EventArgs.Empty);
+            }
+            base.WndProc(ref m);
+        }
+    }
+}
+'@ -ReferencedAssemblies System.Windows.Forms
+    $script:taskbarWatch = New-Object DshTray.TaskbarWatch
+    $script:taskbarWatch.add_TaskbarRecreated({
+        try {
+            $tray.Visible = $false
+            $tray.Visible = $true
+            Write-TrayLog 'taskbar recreated; tray icon re-registered'
+        } catch {
+            Write-TrayLog ('tray icon re-register failed: ' + $_.Exception.Message)
+        }
+    })
+    Write-TrayLog 'taskbar watcher armed'
+} catch {
+    Write-TrayLog ('taskbar watcher unavailable: ' + $_.Exception.Message)
+}
+
+# ---- 端口占用者查询（GetExtendedTcpTable，纯 iphlpapi，不加载 NetTCPIP/CIM 模块）----
+# Stop-Harness 用它找 web 端口的监听进程 = harness node 本体（杀 cmd 后的孤儿、外部
+# 启动的实例都能覆盖，比按进程名猜准得多）。查询任何进程的 TCP 表都不需要管理员。
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace DshTray
+{
+    public static class PortOwner
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MibTcpRowOwnerPid
+        {
+            public uint State;
+            public uint LocalAddr;
+            public uint LocalPort;
+            public uint RemoteAddr;
+            public uint RemotePort;
+            public uint OwningPid;
+        }
+
+        [DllImport("iphlpapi.dll", SetLastError = true)]
+        private static extern uint GetExtendedTcpTable(IntPtr pTcpTable, ref int dwOutBufLen, bool sort, uint ipVersion, int tblClass, uint reserved);
+
+        // 返回在 127.0.0.1:port 处 LISTEN 的进程 PID；找不到返回 0
+        public static int FindListenerPid(int port)
+        {
+            uint AF_INET = 2;
+            const int TCP_TABLE_OWNER_PID_LISTEN = 3;
+            const uint MIB_TCP_STATE_LISTEN = 2;
+            int size = 0;
+            GetExtendedTcpTable(IntPtr.Zero, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_LISTEN, 0);
+            if (size <= 0) return 0;
+            IntPtr buf = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (GetExtendedTcpTable(buf, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_LISTEN, 0) != 0) return 0;
+                int count = Marshal.ReadInt32(buf, 0);
+                long rowPtr = buf.ToInt64() + 4;
+                int rowSize = Marshal.SizeOf(typeof(MibTcpRowOwnerPid));
+                for (int i = 0; i < count; i++)
+                {
+                    MibTcpRowOwnerPid row = (MibTcpRowOwnerPid)Marshal.PtrToStructure(new IntPtr(rowPtr), typeof(MibTcpRowOwnerPid));
+                    // dwLocalPort 的高 16 位才是端口号（网络字节序存在 dword 前 16 位）
+                    int localPort = ((int)((row.LocalPort >> 8) & 0xFF)) | ((int)(row.LocalPort & 0xFF) << 8);
+                    if (row.State == MIB_TCP_STATE_LISTEN && localPort == port) return (int)row.OwningPid;
+                    rowPtr += rowSize;
+                }
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+            return 0;
+        }
+    }
+}
+'@ -ReferencedAssemblies System.Windows.Forms
+    Write-TrayLog 'port owner query armed'
+} catch {
+    Write-TrayLog ('port owner query unavailable: ' + $_.Exception.Message)
+}
 
 # ---- 端口探测（纯 .NET，避免加载 NetTCPIP/CIM 模块）----
 # 实测：Import-Module NetTCPIP 会让常驻内存 +29MB；托盘每 3 秒轮询一次，
@@ -1026,26 +1168,40 @@ function Invoke-MemoryTrim {
     } catch {}
 }
 
-# ---- 停止 Harness（端口占用者 + 命令行含 dsh 的 node 进程）----
+# ---- 停止 Harness（cmd 包装器 + 端口占用者，整条链不留孤儿）----
+# $script:proc 只是 cmd /c 包装器：只杀它会把 node 留成孤儿继续占着 3080（实测复现），
+# 重启的新 harness 就会 EADDRINUSE 秒退、托盘跟着退出丢图标（"重启后托盘消失但 dsh
+# 还在跑"的完整链条）。杀完包装器后用 GetExtendedTcpTable 找出端口的监听者（node
+# 本体，无论它是孤儿还是外部启动的）一并杀，再以 CIM 按 bin 路径兜底扫一遍。
 function Stop-Harness {
     $pids = @()
-    # 托盘自己拉起的 harness：优先用进程句柄，避免任何模块加载
     if ($script:spawned -and $script:proc) {
         try { if (-not $script:proc.HasExited) { $pids += $script:proc.Id } } catch {}
     }
-    if ($pids.Count -eq 0) {
-        # 外部启动的 harness：才走 CIM 查端口占用者（低频路径）
-        try {
-            $dshProcs = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
-                Where-Object { $_.CommandLine -match 'dsh' } |
-                Select-Object -ExpandProperty ProcessId
-            $pids += $dshProcs
-        } catch {}
+    # 端口监听者 = harness node 本体（孤儿/外部启动都覆盖）；$PID 排除自己
+    try {
+        $owner = [DshTray.PortOwner]::FindListenerPid($script:webPort)
+        if ($owner -and ($owner -ne $PID)) { $pids += $owner }
+    } catch {
+        Write-TrayLog ('port owner query failed: ' + $_.Exception.Message)
     }
-    $pids | Where-Object { $_ } | Sort-Object -Unique | ForEach-Object {
-        Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue
+    # 兜底：命令行含本 bin 的 node 进程（CIM 不可用时跳过，上面的端口占用者已覆盖主路径）
+    try {
+        $escaped = [regex]::Escape($bin)
+        $dshProcs = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
+            Where-Object { $_.CommandLine -match $escaped } |
+            Select-Object -ExpandProperty ProcessId
+        $pids += $dshProcs
+    } catch {
+        Write-TrayLog ('cim query failed: ' + $_.Exception.Message)
     }
-    Write-TrayLog 'stop requested'
+    $targets = @($pids | Where-Object { $_ } | Sort-Object -Unique)
+    foreach ($target in $targets) {
+        Stop-Process -Id $target -Force -ErrorAction SilentlyContinue
+    }
+    $label = '(none found)'
+    if ($targets.Count -gt 0) { $label = ($targets -join ',') }
+    Write-TrayLog ('stop requested, targets: ' + $label)
     Invoke-MemoryTrim
 }
 
@@ -1059,8 +1215,15 @@ $miExit.add_Click({
 $tray.add_DoubleClick({ Start-Process (Get-HarnessUrl) })
 
 # ---- 启动 harness 进程（CreateNoWindow：从 API 层面禁止控制台）----
+# --no-open：dsh web 默认自己会开一次浏览器（openBrowser 默认 true），托盘这边端口就绪
+# 后又开一次——"启动时同时弹出多个浏览器界面"正是这两次叠加。统一改由托盘开且只开一次。
+# 旧版 dsh 不认该参数时会在启动几秒内退出，轮询处探测到后摘掉开关重试一次。
+$script:harnessNoOpen = $true
+$script:harnessStartedAt = Get-Date
 function Start-HarnessProcess {
-    $cmdLine = '/c ""' + $node + '" "' + $bin + '" web >> "' + $outLog + '" 2>> "' + $errLog + '" "'
+    $openArg = ''
+    if ($script:harnessNoOpen) { $openArg = ' --no-open' }
+    $cmdLine = '/c ""' + $node + '" "' + $bin + '" web' + $openArg + ' >> "' + $outLog + '" 2>> "' + $errLog + '" "'
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $env:ComSpec
     $psi.Arguments = $cmdLine
@@ -1071,6 +1234,7 @@ function Start-HarnessProcess {
     $script:proc.StartInfo = $psi
     [void]$script:proc.Start()
     $script:spawned = $true
+    $script:harnessStartedAt = Get-Date
     Write-TrayLog ('harness started hidden, pid ' + $script:proc.Id)
 }
 
@@ -1152,14 +1316,32 @@ $timer.add_Tick({
         } catch {}
     }
     if ($script:spawned -and $script:proc -and $script:proc.HasExited) {
-        Write-TrayLog 'harness exited'
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '已停止'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
-        $tray.ShowBalloonTip(2500)
-        Start-Sleep -Seconds 2
-        $tray.Visible = $false
-        [System.Windows.Forms.Application]::Exit()
+        if (Test-PortOpen $script:webPort) {
+            # 我们拉起的进程退了，但端口仍有人在听：外部 harness 抢先/并存（插件拉起托盘、
+            # 或用户自己在终端跑 dsh web 的竞态）。转挂靠模式继续活着——托盘图标不能跟着
+            # 消失，否则就是"dsh 还在跑、托盘却没了、只能手动再启动"。
+            $script:spawned = $false
+            $script:proc = $null
+            Write-TrayLog 'spawned harness exited but port 3080 is served; attaching to external harness'
+            $tray.BalloonTipTitle = 'DeepSeek Harness'
+            $tray.BalloonTipText = '已在运行'
+            $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+            $tray.ShowBalloonTip(2500)
+        } elseif ($script:harnessNoOpen -and ((Get-Date) - $script:harnessStartedAt).TotalSeconds -lt 15) {
+            # 旧版 dsh 不认 --no-open：启动几秒内就退且端口没人听。摘掉开关重试一次。
+            $script:harnessNoOpen = $false
+            Write-TrayLog 'harness exited right after start; retrying without --no-open (old dsh?)'
+            try { Start-HarnessProcess } catch { }
+        } else {
+            Write-TrayLog 'harness exited'
+            $tray.BalloonTipTitle = 'DeepSeek Harness'
+            $tray.BalloonTipText = '已停止'
+            $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
+            $tray.ShowBalloonTip(2500)
+            Start-Sleep -Seconds 2
+            $tray.Visible = $false
+            [System.Windows.Forms.Application]::Exit()
+        }
     }
 })
 $timer.Start()
@@ -1176,3 +1358,5 @@ $tray.Visible = $false
 $tray.Dispose()
 try { $mutex.ReleaseMutex() } catch {}
 Write-TrayLog 'tray launcher exited'
+# 归一化退出码：优雅退出路径固定 0，别让消息循环收尾状态被外层读成异常退出（exit 1）
+exit 0
