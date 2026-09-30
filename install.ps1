@@ -448,8 +448,13 @@ $lnk = $ws.CreateShortcut($lnkPath)
 $lnk.TargetPath = 'C:\WINDOWS\System32\wscript.exe'
 $lnk.Arguments = '"' + $launcherDest + '"'
 $lnk.WorkingDirectory = $InstallDir
+# IconLocation 必须是 ico 文件全路径：预设名要解析成安装目录 icons\<名>.ico。
+# 曾把预设名原样拼接（写成 "deepseek,0" 这种裸文件名），Windows 解析不了 → 桌面快捷方式白板。
 $defaultIcon = Join-Path $iconDir 'liangzu.ico'
-if ($iconSetting -ne 'liangzu') { $lnk.IconLocation = $iconSetting + ',0' } else { $lnk.IconLocation = $defaultIcon + ',0' }
+$iconFile = $iconSetting
+if ($PresetNames -contains $iconSetting) { $iconFile = Join-Path $iconDir ($iconSetting + '.ico') }
+if (-not (Test-Path $iconFile)) { $iconFile = $defaultIcon }
+$lnk.IconLocation = $iconFile + ',0'
 $lnk.Description = 'DeepSeek Harness 系统托盘启动器'
 $lnk.WindowStyle = 1
 $lnk.Save()

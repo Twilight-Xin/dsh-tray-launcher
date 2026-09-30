@@ -90,6 +90,11 @@ check("显式 -ShortcutName 优先于配置", inst.includes("$PSBoundParameters.
 check("配置损坏时不复用", inst.includes("无法解析，将重新生成"));
 check("安装器不写三元运算符（PS 5.1 不支持）", !/\?\s[^()]*:\s/.test(inst.replace(/\$[A-Za-z]+:/g, "")));
 
+// 5.5) 快捷方式图标必须写 ico 全路径：预设名裸拼进 IconLocation（"deepseek,0"）Windows 解析不了 → 桌面白板
+check("快捷方式图标解析成 ico 全路径", inst.includes("if ($PresetNames -contains $iconSetting) { $iconFile = Join-Path $iconDir ($iconSetting + '.ico') }"));
+check("IconLocation 不再写裸预设名", !inst.includes("$lnk.IconLocation = $iconSetting + ',0'"));
+check("图标文件缺失时回退默认梁祖", inst.includes("if (-not (Test-Path $iconFile)) { $iconFile = $defaultIcon }"));
+
 // 7) 仪表盘可选 + 可卸载
 check("安装器提供 -UsageMeter/-NoUsageMeter", inst.includes("[switch]$UsageMeter") && inst.includes("[switch]$NoUsageMeter"));
 check("安装器提供 -RemoveUsageMeter", inst.includes("[switch]$RemoveUsageMeter"));
