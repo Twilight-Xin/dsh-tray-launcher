@@ -123,6 +123,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 | `-Autostart` | 同时注册开机自启（复制快捷方式到启动文件夹） |
 | `-Yes` | 跳过安装前的确认提示（自动化场景） |
 | `-DryRun` | 只检测和打印，不写入任何文件 |
+| `-NoReuse` | 忽略安装目录里已有的配置，全部按当前环境重新探测 |
+| `-UsageMeter` / `-NoUsageMeter` | 安装 / 不安装内置用量仪表；都不传时**交互式询问**（`-Yes`、`-DryRun` 场景默认安装） |
+| `-RemoveUsageMeter` | 只卸载已注册的用量仪表：注销 web profile 注册 + 删除本地插件副本，不做任何安装 |
+
+**重复安装会复用已有配置**：安装器先读取 `%LOCALAPPDATA%\Programs\DSHTray\dsh-tray.config.json` 并逐字段校验，有效的 `node` / `dshBin` 路径、自定义图标、`url`、`cwd`、已注册的插件版本会被沿用（终端会打印每个字段是复用还是忽略及原因），缺失或失效的字段才重新探测；配置损坏则整份重新生成。显式传入的参数（如 `-DshPath`、`-ShortcutName`）永远优先于配置，需要彻底重来就用 `-NoReuse`。
+
+**卸载内置用量仪表**（三种等价入口）：
+
+```powershell
+# 1) 安装器参数（推荐：顺手也能看到 dsh 的真实报错）
+dsh-tray-install -RemoveUsageMeter
+# 2) 托盘菜单：用量仪表 → 卸载用量仪表
+# 3) 卸载整个启动器时会一并注销；想保留注册就加 -KeepUsageMeter
+powershell -File uninstall.ps1 -KeepUsageMeter
+```
+
+仪表盘注册在 profile 里，所以卸载后需**重启 dsh web**（托盘菜单 → 重启 Harness）才会从界面消失。若注销失败（例如缺少 pnpm），安装器会保留配置里的版本号并以非 0 退出，避免谎报"未安装"。
 
 示例：
 
@@ -142,8 +159,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Icon D:\icons\l
 | 托盘「重启 Harness」 | 停止并重新拉起 dsh web（无窗口），就绪后自动重开浏览器 |
 | 托盘「切换图标」 | 弹出子菜单：梁祖 / 鲸鱼娘 / DeepSeek / 自定义…（选择后托盘与快捷方式图标立即同步，选中项打勾） |
 | 托盘「开机自启」 | 勾选状态 = 是否已注册开机自启；点击即切换（自动创建/删除启动文件夹里的快捷方式，气泡提示结果） |
-| 托盘「用量仪表」 | 子菜单显示当前版本；「更新用量仪表」从随包依赖同步最新版并重新注册（更新后需重启 Harness 生效） |
-| 托盘「更新启动器」 | 子菜单显示当前/最新版本；「检查更新」查询 npm 最新版；「更新到 vX.Y.Z」一键 `npm i -g` 更新自身（重启托盘后生效） |
+| 托盘「用量仪表」 | 子菜单显示当前版本；「更新用量仪表」从随包依赖同步最新版并重新注册；「卸载用量仪表」注销 profile 注册并删除本地副本（两者都需重启 Harness 生效）。插件注册/更新走 `dsh plugin`，它内部直接调用 `pnpm`——机器上没有 pnpm 会失败，先 `npm install -g pnpm` |
+| 托盘「更新启动器」 | 子菜单显示当前/最新版本；「检查更新」查询 npm 最新版；「更新到 vX.Y.Z」后台 `npm i -g` 更新自身，成功后自动把新版 `tray.ps1`/图标/`package.json` 同步到安装目录（重启托盘后生效）。过程不冻结托盘 UI，失败时气泡直接显示 npm 的真实报错 |
 | 托盘「退出」 | 停止 harness + 关闭托盘（全部退出） |
 | harness 意外退出 | 气泡提示「已停止」并自动收起托盘 |
 
@@ -167,7 +184,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Icon D:\icons\l
 | `icon` | 图标：`liangzu`（梁祖，默认）/ `whale-girl`（鲸鱼娘）/ `deepseek`（DeepSeek 鲸鱼）/ 自定义 `.ico` 的绝对路径；托盘右键「切换图标」会写这个字段 |
 | `shortcut` | 桌面快捷方式路径，切图标时用它同步快捷方式图标 |
 
-`dshBin` / `node` 缺省时按「npm 全局 → npx 缓存 → PATH → 常见路径」顺序自动探测。日志写在安装目录 `logs\` 下（`dsh-out.log` / `dsh-err.log` / `dsh-tray.log`）。
+`dshBin` / `node` 缺省时按「npm 全局 → npx 缓存 → PATH → 常见路径」顺序自动探测。日志写在安装目录 `logs\` 下：`dsh-out.log` / `dsh-err.log`（Harness 自身的输出，由 Harness 进程独占持有）、`dsh-tray.log`（托盘自己的日志）、`dsh-update-out.log` / `dsh-update-err.log`（启动器自更新）、`dsh-plugin-out.log` / `dsh-plugin-err.log`（用量仪表注册）。托盘动作刻意不写 Harness 那两份日志——Harness 运行时独占持有它们，`cmd` 的 `>>` 会直接以退出码 1 失败。
 
 ## 卸载
 
