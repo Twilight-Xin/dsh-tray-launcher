@@ -10,6 +10,7 @@ const read = (name) => readFileSync(fileURLToPath(new URL(`../${name}`, import.m
 
 const tray = read("tray.ps1");
 const inst = read("install.ps1");
+const uninstall = read("uninstall.ps1");
 const pkg = JSON.parse(read("package.json"));
 
 let failed = 0;
@@ -114,6 +115,11 @@ check("托盘菜单有卸载项", tray.includes("'卸载用量仪表'") && tray.
 check("托盘卸载注销后清空配置版本", tray.includes("Save-CfgValue 'pluginVersion' ''"));
 check("uninstall.ps1 会注销插件", read("uninstall.ps1").includes("plugin --profile") && read("uninstall.ps1").includes("remove dsh-plugin-usage-meter"));
 check("uninstall.ps1 支持 -KeepUsageMeter", read("uninstall.ps1").includes("[switch]$KeepUsageMeter"));
+check("自定义快捷方式按配置路径清理", uninstall.includes("$configuredShortcut") && uninstall.includes("$cfg.shortcut"));
+check("KeepUsageMeter 保留插件目录", uninstall.includes("$KeepUsageMeter") && uninstall.includes("$_.Name -ne 'plugins'"));
+check("卸载注销失败保留现场并返回非 0", uninstall.includes("$usageMeterCleanupOk = $false") && uninstall.includes("exit 1"));
+check("卸载进程匹配排除自身", uninstall.includes("$_.ProcessId -ne $PID"));
+check("卸载文件删除失败返回非 0", uninstall.includes("$cleanupOk = $false") && uninstall.includes("-ErrorAction Stop"));
 
 // 8) 窗口去重 / 重启静默 / 托盘图标自愈（v1.5.4）
 const pluginJs = read("src/plugin.js");
@@ -135,6 +141,8 @@ check("UI 线程异常不弹窗卡死托盘", tray.includes("add_ThreadException
 check("插件拉起托盘带 -NoOpen", pluginJs.includes('"-NoOpen"'));
 check("托盘异常退出时插件自动重启", pluginJs.includes("if (code === 0) return;") && pluginJs.includes("attempts > 5"));
 check("dispose 后停止重启", pluginJs.includes("disposed = true"));
+check("插件 spawn 失败不会触发未处理异常", pluginJs.includes('child.on("error", scheduleRestart)'));
+check("托盘启动和轮询使用配置端口", tray.includes("$already = Test-PortOpen $script:webPort") && tickChunk.includes("Test-PortOpen $script:webPort"));
 
 if (failed > 0) {
   console.error(`\n${failed} 项静态检查未通过`);

@@ -1242,9 +1242,9 @@ function Start-HarnessProcess {
 $script:spawned = $false
 $script:proc = $null
 
-$already = Test-PortOpen 3080
+$already = Test-PortOpen $script:webPort
 if ($already) {
-    Write-TrayLog 'harness already listening on 3080; tray attached'
+    Write-TrayLog ('harness already listening on ' + $script:webPort + '; tray attached')
     $tray.BalloonTipTitle = 'DeepSeek Harness'
     $tray.BalloonTipText = '已在运行'
     $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
@@ -1291,7 +1291,7 @@ $timer.add_Tick({
     # 大量短命对象，定期 GC + EmptyWorkingSet 能把常驻读数压回实际在用的量。
     if ($script:tick % 20 -eq 0) { Invoke-MemoryTrim }
     if (-not $NoOpen -and -not $script:opened) {
-        if (Test-PortOpen 3080) {
+        if (Test-PortOpen $script:webPort) {
             $script:opened = $true
             Start-Process (Get-HarnessUrl)
             Write-TrayLog 'browser opened'

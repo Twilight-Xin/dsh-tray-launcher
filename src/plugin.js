@@ -41,7 +41,19 @@ function apply(ctx) {
   let disposed = false;
   let attempts = 0;
   let startedAt = 0;
+  let restartPending = false;
   let child = null;
+
+  const scheduleRestart = () => {
+    if (disposed || restartPending) return;
+    attempts = Date.now() - startedAt > 60_000 ? 1 : attempts + 1;
+    if (attempts > 5) return;
+    restartPending = true;
+    setTimeout(() => {
+      restartPending = false;
+      if (!disposed) spawnTray();
+    }, 3000);
+  };
 
   const spawnTray = () => {
     // -NoOpen：harness 启动时自己会打开浏览器，插件拉起的托盘不再重复开一个。
@@ -63,16 +75,13 @@ function apply(ctx) {
     );
     child.unref();
     startedAt = Date.now();
+    child.on("error", scheduleRestart);
     child.on("exit", (code) => {
       if (disposed) return;
       // 退出码 0 = 正常退出（全局互斥锁已被别的托盘实例持有等）；非 0 = 异常崩溃。
       // harness 还在跑而托盘没了，图标就得靠手动再启动找回——这里自动重启补上。
       if (code === 0) return;
-      attempts = Date.now() - startedAt > 60_000 ? 1 : attempts + 1;
-      if (attempts > 5) return; // 连续崩溃：放弃自动重启，避免无限拉起
-      setTimeout(() => {
-        if (!disposed) spawnTray();
-      }, 3000);
+      scheduleRestart();
     });
   };
   spawnTray();
