@@ -11,7 +11,14 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
+
+# 安装目录：优先取环境变量 DSH_TRAY_LAUNCHER_PATH；未设置/为空时回退到默认 %LOCALAPPDATA%\Programs\DSHTray（与 install.ps1 一致）
+$envInstallDir = "$env:DSH_TRAY_LAUNCHER_PATH".Trim()
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\DSHTray'
+if ($envInstallDir) {
+    try { $InstallDir = [System.IO.Path]::GetFullPath($envInstallDir) } catch { $InstallDir = $envInstallDir }
+    Write-Host ('安装目录来自环境变量 DSH_TRAY_LAUNCHER_PATH: ' + $InstallDir)
+}
 $ConfigPath = Join-Path $InstallDir 'dsh-tray.config.json'
 $Profile = 'web'
 $configuredShortcut = ''

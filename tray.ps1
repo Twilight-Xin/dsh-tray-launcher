@@ -492,7 +492,8 @@ function Wait-LoggedCommand($cmdLine, $timeoutMs, $workDir) {
 
 # ---- 自更新：日志文件与部署副本同步 ----
 function Test-IsDeployed {
-    # 只有"安装在 %LOCALAPPDATA%\Programs\DSHTray 的副本"才需要同步部署文件。
+    # 只有"install.ps1 部署到安装目录的副本"（默认 %LOCALAPPDATA%\Programs\DSHTray，可被
+    # 环境变量 DSH_TRAY_LAUNCHER_PATH 改写）才需要同步部署文件。
     # 从 npm 包目录或 git 检出里运行时不能覆盖自身（否则会污染检出或正在安装的包）。
     if (($PSScriptRoot -split '[\\/]') -contains 'node_modules') { return $false }
     if (Test-Path (Join-Path $PSScriptRoot '.git')) { return $false }

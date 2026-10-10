@@ -127,7 +127,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 | `-UsageMeter` / `-NoUsageMeter` | 安装 / 不安装内置用量仪表；都不传时**交互式询问**（`-Yes`、`-DryRun` 场景默认安装） |
 | `-RemoveUsageMeter` | 只卸载已注册的用量仪表：注销 web profile 注册 + 删除本地插件副本，不做任何安装 |
 
-**重复安装会复用已有配置**：安装器先读取 `%LOCALAPPDATA%\Programs\DSHTray\dsh-tray.config.json` 并逐字段校验，有效的 `node` / `dshBin` 路径、自定义图标、`url`、`cwd`、已注册的插件版本会被沿用（终端会打印每个字段是复用还是忽略及原因），缺失或失效的字段才重新探测；配置损坏则整份重新生成。显式传入的参数（如 `-DshPath`、`-ShortcutName`）永远优先于配置，需要彻底重来就用 `-NoReuse`。
+**安装目录**：默认 `%LOCALAPPDATA%\Programs\DSHTray\`；设置环境变量 `DSH_TRAY_LAUNCHER_PATH`（如 `D:\tools\dsh-tray`）可改到任意目录，**未设置或为空时回退到默认值**。安装器与卸载器遵循同一变量，托盘脚本、配置、日志、图标都随之落在该目录。
+
+**重复安装会复用已有配置**：安装器先读取安装目录下的 `dsh-tray.config.json` 并逐字段校验，有效的 `node` / `dshBin` 路径、自定义图标、`url`、`cwd`、已注册的插件版本会被沿用（终端会打印每个字段是复用还是忽略及原因），缺失或失效的字段才重新探测；配置损坏则整份重新生成。显式传入的参数（如 `-DshPath`、`-ShortcutName`）永远优先于配置，需要彻底重来就用 `-NoReuse`。
 
 **卸载内置用量仪表**（三种等价入口）：
 
@@ -166,7 +168,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Icon D:\icons\l
 
 ## 配置
 
-安装器在安装目录（`%LOCALAPPDATA%\Programs\DSHTray\`）生成 `dsh-tray.config.json`，全部字段可选：
+安装器在安装目录（默认 `%LOCALAPPDATA%\Programs\DSHTray\`，可用环境变量 `DSH_TRAY_LAUNCHER_PATH` 改写）生成 `dsh-tray.config.json`，全部字段可选：
 
 ```json
 {
@@ -200,7 +202,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/fancr-code/dsh-tray-launcher/main/uninstall.ps1' -OutFile $env:TEMP\dshtray-uninstall.ps1; & $env:TEMP\dshtray-uninstall.ps1"
 ```
 
-会自动：结束托盘进程 → 删除桌面快捷方式（含开机自启副本）→ 删除安装目录 `%LOCALAPPDATA%\Programs\DSHTray\`。
+会自动：结束托盘进程 → 删除桌面快捷方式（含开机自启副本）→ 删除安装目录（默认 `%LOCALAPPDATA%\Programs\DSHTray\`，或 `DSH_TRAY_LAUNCHER_PATH` 指定的目录）。
 
 npm 方式安装的再执行：`npm uninstall -g dsh-tray-launcher`
 

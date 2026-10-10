@@ -3,4 +3,7 @@ dsh-tray.config.json
 *.log
 *.lnk
 debug/
+node_modules/
 .*/
+!.github/
+!.mnemon/

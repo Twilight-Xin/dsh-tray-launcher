@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "content": "DSH 会话的 write/edit 工具会把 .ps1 文件的 UTF-8 BOM 剥掉（dsh-tray-launcher 仓库用带 BOM 探针文件实验证实：edit 一次后 BOM 消失）。后果：桌面快捷方式链路 wscript → powershell.exe（PS 5.1）读无 BOM 的 UTF-8 按 GBK 解码中文 → 乱码破坏字符串 → 解析失败、托盘静默起不来；pwsh 7 默认 UTF-8 不受影响，所以手工测试正常、快捷方式坏。该仓库改完 .ps1 必须重补 BOM（pwsh 按字节前置 EF BB BF）并跑 npm test（scripts/check-bom.mjs 守卫；CI 只在 main/PR 触发，feat 分支必须本地跑）。",
+      "created_at": "2026-10-10T05:50:57.596Z",
+      "updated_at": "2026-10-10T05:50:57.596Z",
+      "target": "memory",
+      "importance": "normal"
+    },
+    {
+      "content": "dsh-tray-launcher 用户实际安装目录为 D:\\apps\\dshTray（用户级环境变量 DSH_TRAY_LAUNCHER_PATH 指定，非默认 %LOCALAPPDATA%\\Programs\\DSHTray）；桌面快捷方式 DeepSeek Harness.lnk → System32\\wscript.exe → D:\\apps\\dshTray\\launch-hidden.vbs → powershell.exe（PS 5.1）。托盘「更新启动器」会用全局 npm 包目录的 tray.ps1 覆盖部署副本——改完仓库需先提交并更新全局包，否则下次自更新可能把旧/无 BOM 文件带回来。",
+      "created_at": "2026-10-10T05:50:57.611Z",
+      "updated_at": "2026-10-10T05:50:57.611Z",
+      "target": "memory",
+      "importance": "normal"
+    }
+  ]
+}

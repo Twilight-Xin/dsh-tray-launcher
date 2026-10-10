@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "documents": [
+    {
+      "id": "e38c38f2-db35-4a4a-a624-5c75e9e29c76",
+      "title": "dsh-tray-launcher 编码守卫与安装目录环境变量",
+      "description": "PowerShell 脚本 UTF-8 BOM 守卫协议、DSH_TRAY_LAUNCHER_PATH 安装目录机制与部署链路要点",
+      "status": "active",
+      "filename": "dsh-tray-launcher-e38c38f2.md",
+      "relativePath": "documents/active/dsh-tray-launcher-e38c38f2.md",
+      "sourcePaths": [
+        "tray.ps1",
+        "install.ps1",
+        "uninstall.ps1",
+        "scripts/check-bom.mjs",
+        "README.md"
+      ],
+      "sessionIds": [
+        "session-b2f45ded-59ee-4561-9e4a-d0067e2869e6"
+      ],
+      "createdAt": "2026-10-10T05:55:18.194Z",
+      "updatedAt": "2026-10-10T05:55:18.194Z",
+      "lastAccessedAt": "2026-10-10T05:55:18.194Z",
+      "revision": 1,
+      "contentHash": "2886e80c9c7125aa16010316ad7ad97be79ccab90df359e1eb83c9a53f23487b",
+      "sizeBytes": 2614,
+      "memoryBodyIds": []
+    }
+  ]
+}

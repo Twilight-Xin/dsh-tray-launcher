@@ -34,7 +34,14 @@ $ErrorActionPreference = 'Stop'
 $RepoOwner = 'fancr-code'
 $RepoName  = 'dsh-tray-launcher'
 $Branch    = 'main'
+# 安装目录：优先取环境变量 DSH_TRAY_LAUNCHER_PATH；未设置/为空时回退到默认 %LOCALAPPDATA%\Programs\DSHTray
+$envInstallDir = "$env:DSH_TRAY_LAUNCHER_PATH".Trim()
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\DSHTray'
+if ($envInstallDir) {
+    # 归一化成绝对路径（支持正斜杠/相对路径）；含非法字符抛异常时保留原始值
+    try { $InstallDir = [System.IO.Path]::GetFullPath($envInstallDir) } catch { $InstallDir = $envInstallDir }
+    Write-Output "安装目录来自环境变量 DSH_TRAY_LAUNCHER_PATH: $InstallDir"
+}
 $ConfigPath = Join-Path $InstallDir 'dsh-tray.config.json'
 
 function Resolve-DshBin {
