@@ -43,6 +43,10 @@ function Get-CfgValue($name, $default) {
 
 $url = Get-CfgValue 'url' 'http://127.0.0.1:3080'
 $cwd = Get-CfgValue 'cwd' $env:USERPROFILE
+# 界面打开方式：'app' = Edge 应用窗口（msedge --app=URL，无地址栏/标签页，像原生 App），
+# 'web' = 系统默认浏览器开普通网页。配置缺失、拼写非法一律按 'app'（用户要求的缺省值）。
+$script:browserMode = ('' + (Get-CfgValue 'browserMode' 'app')).Trim().ToLower()
+if ($script:browserMode -ne 'app' -and $script:browserMode -ne 'web') { $script:browserMode = 'app' }
 # Web 端口：从配置 url 里解析（杀 3080 监听者、重启前等端口都用它；缺省 3080）
 $script:webPort = 3080
 if ($url -match '://[^/]+:(\d+)') { $script:webPort = [int]$Matches[1] }
@@ -278,6 +282,51 @@ function Get-HarnessUrl {
         }
     } catch {}
     return $url
+}
+
+# ---- 打开界面（Edge app 模式 / 网页模式的统一入口）----
+# 托盘里所有"打开界面"的入口（菜单「打开界面」、双击托盘图标、端口就绪自动开）都走
+# Open-HarnessUi，打开方式只由配置 browserMode 决定，不会出现一处 app 一处 web 的分裂。
+$script:edgeExe = $null
+function Find-EdgeExe {
+    if ($script:edgeExe) { return $script:edgeExe }
+    $cands = @()
+    # Edge 只有三种安装位置：x86 Program Files（默认）、64 位 Program Files、用户级
+    if (${env:ProgramFiles(x86)}) { $cands += (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe') }
+    if ($env:ProgramFiles) { $cands += (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe') }
+    if ($env:LOCALAPPDATA) { $cands += (Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\Application\msedge.exe') }
+    # 注册表 App Paths：系统解析 "msedge" 的权威来源，兜住被改过的安装位置
+    foreach ($ap in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe',
+                      'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe')) {
+        try {
+            $p = (Get-ItemProperty -Path $ap -Name '(default)' -ErrorAction Stop).'(default)'
+            if ($p) { $cands += "$p".Trim('"') }
+        } catch {}
+    }
+    foreach ($c in $cands) {
+        if ($c -and (Test-Path $c)) { $script:edgeExe = $c; return $c }
+    }
+    return $null
+}
+
+function Open-HarnessUi {
+    $u = Get-HarnessUrl
+    if ($script:browserMode -eq 'web') {
+        Start-Process $u
+        Write-TrayLog 'ui opened in default browser (browserMode=web)'
+        return
+    }
+    $edge = Find-EdgeExe
+    if ($edge) {
+        # 引号必须加：带 token 的地址含 &，Start-Process 走 ShellExecute，
+        # 不包起来查询串会被拆成多个参数，app 窗口打开的就是残缺地址。
+        Start-Process -FilePath $edge -ArgumentList ('--app="' + $u + '"')
+        Write-TrayLog 'ui opened in edge app mode (browserMode=app)'
+    } else {
+        # 机器上没有 Edge：退回默认浏览器，总比点了没反应强
+        Start-Process $u
+        Write-TrayLog 'msedge.exe not found; ui opened in default browser'
+    }
 }
 
 # 单实例保护：同名实例只允许一个（默认 Global\dsh-tray-launcher）
@@ -722,6 +771,26 @@ $script:customMenuItem.add_Click({
 $miIcon.DropDownItems.Add($script:customMenuItem) | Out-Null
 $menu.Items.Add($miIcon) | Out-Null
 
+# 界面打开方式勾选菜单：勾选 = Edge 应用窗口（browserMode=app），取消勾选 = 普通网页（web）。
+# 点击立即写配置并生效——$script:browserMode 是唯一开关来源，Open-HarnessUi 每次都读它，
+# 所以切完不用重启托盘，下次「打开界面」就是新模式。
+$script:miUiMode = New-Object System.Windows.Forms.ToolStripMenuItem('用 Edge 应用窗口打开界面')
+$script:miUiMode.CheckOnClick = $false
+$script:miUiMode.Checked = ($script:browserMode -eq 'app')
+$script:miUiMode.add_Click({
+    if ($script:browserMode -eq 'app') { $script:browserMode = 'web' } else { $script:browserMode = 'app' }
+    Save-CfgValue 'browserMode' $script:browserMode
+    $script:miUiMode.Checked = ($script:browserMode -eq 'app')
+    if ($script:browserMode -eq 'app') {
+        Write-TrayLog 'browserMode switched to app via menu'
+        Show-TrayBalloon '已改为 Edge 应用窗口打开界面（写入 browserMode=app）' ([System.Windows.Forms.ToolTipIcon]::Info)
+    } else {
+        Write-TrayLog 'browserMode switched to web via menu'
+        Show-TrayBalloon '已改为普通网页打开界面（写入 browserMode=web，系统默认浏览器）' ([System.Windows.Forms.ToolTipIcon]::Info)
+    }
+})
+$menu.Items.Add($script:miUiMode) | Out-Null
+
 # 开机自启（勾选 = 启动文件夹里有快捷方式；点击即切换）
 function Get-ShortcutPath {
     $p = Get-CfgValue 'shortcut' ''
@@ -1021,7 +1090,7 @@ $miExit = $menu.Items.Add('退出')
 $tray.ContextMenuStrip = $menu
 Update-IconMenuChecks
 
-$miOpen.add_Click({ Start-Process (Get-HarnessUrl) })
+$miOpen.add_Click({ Open-HarnessUi })
 $miLog.add_Click({ Start-Process notepad $outLog })
 
 # ---- 托盘图标自愈：任务栏重建后自动重新注册 ----
@@ -1213,7 +1282,7 @@ $miExit.add_Click({
     $tray.Visible = $false
     [System.Windows.Forms.Application]::Exit()
 })
-$tray.add_DoubleClick({ Start-Process (Get-HarnessUrl) })
+$tray.add_DoubleClick({ Open-HarnessUi })
 
 # ---- 启动 harness 进程（CreateNoWindow：从 API 层面禁止控制台）----
 # --no-open：dsh web 默认自己会开一次浏览器（openBrowser 默认 true），托盘这边端口就绪
@@ -1294,7 +1363,7 @@ $timer.add_Tick({
     if (-not $NoOpen -and -not $script:opened) {
         if (Test-PortOpen $script:webPort) {
             $script:opened = $true
-            Start-Process (Get-HarnessUrl)
+            Open-HarnessUi
             Write-TrayLog 'browser opened'
         }
     }

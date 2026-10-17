@@ -144,6 +144,19 @@ check("dispose 后停止重启", pluginJs.includes("disposed = true"));
 check("插件 spawn 失败不会触发未处理异常", pluginJs.includes('child.on("error", scheduleRestart)'));
 check("托盘启动和轮询使用配置端口", tray.includes("$already = Test-PortOpen $script:webPort") && tickChunk.includes("Test-PortOpen $script:webPort"));
 
+// 9) 打开界面：统一入口 + Edge app 模式为默认（可配置切回普通网页）
+check("三个打开入口都走 Open-HarnessUi", tray.includes("function Open-HarnessUi") &&
+  tray.includes("$miOpen.add_Click({ Open-HarnessUi })") &&
+  tray.includes("$tray.add_DoubleClick({ Open-HarnessUi })") &&
+  tickChunk.includes("Open-HarnessUi"));
+check("app 模式执行 msedge --app= 且地址加引号（护住 token 里的 &）", tray.includes(`'--app="' + $u + '"'`));
+check("browserMode 缺失/非法回落默认 app", tray.includes("Get-CfgValue 'browserMode' 'app'") && tray.includes("if ($script:browserMode -ne 'app' -and $script:browserMode -ne 'web')"));
+check("没有 Edge 时回退默认浏览器", tray.includes("msedge.exe not found; ui opened in default browser"));
+check("安装器写入 browserMode 配置", inst.includes("browserMode   = if ($pickBrowserMode)"));
+check("安装器复用已有 browserMode", inst.includes("$reuse['browserMode'] = $v") && inst.includes("$reuse['browserMode'] = Get-SkipReason"));
+check("托盘有界面打开方式勾选菜单", tray.includes("用 Edge 应用窗口打开界面") && tray.includes("$script:miUiMode.Checked = ($script:browserMode -eq 'app')"));
+check("菜单切换立即写配置并同步勾选", tray.includes("Save-CfgValue 'browserMode' $script:browserMode") && tray.includes("browserMode switched to app via menu") && tray.includes("browserMode switched to web via menu"));
+
 if (failed > 0) {
   console.error(`\n${failed} 项静态检查未通过`);
   process.exit(1);

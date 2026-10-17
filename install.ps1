@@ -121,6 +121,7 @@ $pickUrl = ''
 $pickIcon = ''
 $pickShortcut = ''
 $cwd = ''
+$pickBrowserMode = ''
 $pickPluginVersion = ''
 
 # 复用摘要里的"忽略"原因（不用三元运算符：Windows PowerShell 5.1 不支持）
@@ -146,6 +147,10 @@ if ($existing) {
 
     $v = Get-Prop $existing 'cwd'
     if ($v -and (Test-Path $v)) { $cwd = $v; $reuse['cwd'] = $v } else { $reuse['cwd'] = Get-SkipReason $v }
+
+    # browserMode：只认 app / web 两个合法值（-eq 不区分大小写），其余一律忽略、回落默认 app
+    $v = Get-Prop $existing 'browserMode'
+    if ($v -eq 'app' -or $v -eq 'web') { $pickBrowserMode = $v; $reuse['browserMode'] = $v } else { $reuse['browserMode'] = Get-SkipReason $v }
 
     # icon：预设名要求图标文件在安装目录里；自定义图标要求文件存在
     $v = Get-Prop $existing 'icon'
@@ -485,6 +490,7 @@ $cfg = [ordered]@{
     dshBin        = $dshBin
     node          = $nodePath
     url           = if ($pickUrl) { $pickUrl } else { 'http://127.0.0.1:3080' }
+    browserMode   = if ($pickBrowserMode) { $pickBrowserMode } else { 'app' }
     icon          = $iconSetting
     shortcut      = $lnkPath
     cwd           = $cwd
