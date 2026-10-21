@@ -49,6 +49,7 @@ DeepSeek Harness（dsh）默认在终端里前台运行 `dsh web`——必须留
 - 👆 **托盘菜单**：打开界面 / 打开日志 / 退出（= 停止 harness + 关托盘）；双击图标 = 打开界面
 - 🌐 **就绪自动开浏览器（只开一个）**：托盘拉起 harness 时带 `--no-open` 关掉 dsh 自带的打开动作（否则两边各开一个），端口就绪后由托盘统一开且只开一次；「重启 Harness」不再自动弹浏览器，想开随时双击图标（v1.5.4）
 - 📦 **Edge 应用窗口打开界面（默认）**：`browserMode` 缺省为 `app`，用 `msedge --app="<带 token 的地址>"` 打开——独立窗口、无地址栏/标签页、有自己的任务栏图标，用起来像原生桌面应用；想回到普通网页就设成 `web`（系统默认浏览器），也可以直接用托盘右键菜单「用 Edge 应用窗口打开界面」一键勾选切换（写回配置，立即生效）
+- 🪟 **固定窗口尺寸居中（默认）**：`uiWindowFixed` 缺省为 `on`，每次打开 app 窗口都带 Chromium 原生 `--window-size/--window-position` 参数——默认屏幕工作区宽高各一半、屏幕中央显示，**不受 Edge 记住的旧窗口尺寸影响**（Edge 的 `app_window_placement` 记忆是 Chromium 命令行参数之前应用的，参数永远覆盖它）；想要自定义尺寸改 `uiWindowSize`（如 `1280x720`），想让 Edge 自己记住就用托盘菜单「固定窗口尺寸（半屏居中）」去勾（写回配置，立即生效）
 - 🔒 **单实例保护**：互斥锁 + 端口检测，重复双击快捷方式不会重复启动、也不会多开浏览器界面（后到的实例静默退出，v1.5.4）
 - 🔍 **自动定位 dsh**：配置文件 → npm 全局 → npx 缓存逐级探测，找不到才报错；也可手动指定
 - 🎨 **多图标 + 右键切换**：预设**梁祖 / 鲸鱼娘 / DeepSeek** 三款图标，托盘右键「切换图标」一键更换，**托盘与桌面快捷方式图标同步更新**；也支持「自定义…」选择任意 `.ico`
@@ -130,7 +131,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 
 **安装目录**：默认 `%LOCALAPPDATA%\Programs\DSHTray\`；设置环境变量 `DSH_TRAY_LAUNCHER_PATH`（如 `D:\tools\dsh-tray`）可改到任意目录，**未设置或为空时回退到默认值**。安装器与卸载器遵循同一变量，托盘脚本、配置、日志、图标都随之落在该目录。
 
-**重复安装会复用已有配置**：安装器先读取安装目录下的 `dsh-tray.config.json` 并逐字段校验，有效的 `node` / `dshBin` 路径、自定义图标、`url`、`cwd`、`browserMode`、已注册的插件版本会被沿用（终端会打印每个字段是复用还是忽略及原因），缺失或失效的字段才重新探测；配置损坏则整份重新生成。显式传入的参数（如 `-DshPath`、`-ShortcutName`）永远优先于配置，需要彻底重来就用 `-NoReuse`。
+**重复安装会复用已有配置**：安装器先读取安装目录下的 `dsh-tray.config.json` 并逐字段校验，有效的 `node` / `dshBin` 路径、自定义图标、`url`、`cwd`、`browserMode`、`uiWindowFixed`、`uiWindowSize`、已注册的插件版本会被沿用（终端会打印每个字段是复用还是忽略及原因），缺失或失效的字段才重新探测；配置损坏则整份重新生成。显式传入的参数（如 `-DshPath`、`-ShortcutName`）永远优先于配置，需要彻底重来就用 `-NoReuse`。
 
 **卸载内置用量仪表**（三种等价入口）：
 
@@ -162,6 +163,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Icon D:\icons\l
 | 托盘「重启 Harness」 | 气泡提示后停止并重新拉起 dsh web（无窗口，带 `--no-open`）：杀整棵进程树（cmd 包装器与 node 都不残留）并**等 3080 端口真正释放**再启动，旧实例残留导致的秒退不再发生；不自动弹浏览器，需要时双击托盘图标或菜单「打开界面」（v1.5.5） |
 | 托盘「切换图标」 | 弹出子菜单：梁祖 / 鲸鱼娘 / DeepSeek / 自定义…（选择后托盘与快捷方式图标立即同步，选中项打勾） |
 | 托盘「用 Edge 应用窗口打开界面」 | 勾选状态 = `browserMode`（勾 = `app`，去勾 = `web`）；点击即切换：写回 `dsh-tray.config.json` 并同步勾选与气泡提示，**立即生效、无需重启托盘** |
+| 托盘「固定窗口尺寸（半屏居中）」 | 勾选状态 = `uiWindowFixed`（勾 = `on`，去勾 = `off`）；点击即切换：写回 `dsh-tray.config.json` 并同步勾选与气泡提示，**立即生效、无需重启托盘** |
 | 托盘「开机自启」 | 勾选状态 = 是否已注册开机自启；点击即切换（自动创建/删除启动文件夹里的快捷方式，气泡提示结果） |
 | 托盘「用量仪表」 | 子菜单显示当前版本；「更新用量仪表」从随包依赖同步最新版并重新注册；「卸载用量仪表」注销 profile 注册并删除本地副本（两者都需重启 Harness 生效）。插件注册/更新走 `dsh plugin`，它内部直接调用 `pnpm`——机器上没有 pnpm 会失败，先 `npm install -g pnpm` |
 | 托盘「更新启动器」 | 子菜单显示当前/最新版本；「检查更新」查询 npm 最新版；「更新到 vX.Y.Z」后台 `npm i -g` 更新自身，成功后自动把新版 `tray.ps1`/图标/`package.json` 同步到安装目录（重启托盘后生效）。过程不冻结托盘 UI，失败时气泡直接显示 npm 的真实报错 |
@@ -174,19 +176,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Icon D:\icons\l
 
 ```json
 {
-  "dshBin":      "C:\\...\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js",
-  "node":        "C:\\Program Files\\nodejs\\node.exe",
-  "url":         "http://127.0.0.1:3080",
-  "browserMode": "app",
-  "icon":        "liangzu",
-  "shortcut":    "C:\\Users\\<you>\\Desktop\\DeepSeek Harness.lnk",
-  "cwd":         "C:\\Users\\<you>"
+  "dshBin":       "C:\\...\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js",
+  "node":         "C:\\Program Files\\nodejs\\node.exe",
+  "url":          "http://127.0.0.1:3080",
+  "browserMode":  "app",
+  "uiWindowFixed": "on",
+  "uiWindowSize": "1280x720",
+  "icon":         "liangzu",
+  "shortcut":     "C:\\Users\\<you>\\Desktop\\DeepSeek Harness.lnk",
+  "cwd":          "C:\\Users\\<you>"
 }
 ```
 
 | 字段 | 说明 |
 | --- | --- |
 | `browserMode` | 界面打开方式：`app`（默认）= Edge 应用窗口，实际执行 `msedge --app="<带 token 的地址>"`，无地址栏/标签页；`web` = 交给系统默认浏览器开普通网页。**字段缺失或取值非法一律按 `app`**。手改本字段需重启托盘生效；用托盘右键菜单「用 Edge 应用窗口打开界面」切换则立即生效并写回本字段 |
+| `uiWindowFixed` | 固定窗口尺寸/位置开关：`on`（默认）= 每次打开 app 窗口强制用 `--window-size=WxH --window-position=X,Y`，覆盖 Edge 自己记住的旧尺寸，永远半屏居中；`off` = 交给 Edge 记忆。**字段缺失或取值非法一律按 `on`**。手改需重启托盘；用托盘菜单「固定窗口尺寸（半屏居中）」切换则立即生效并写回本字段 |
+| `uiWindowSize` | 固定窗口尺寸数值：格式 `宽x高`（如 `1280x720`，x/X/逗号/空格分隔都认）；缺失/非法 → 回落屏幕工作区宽高各一半（居中显示） |
 | `icon` | 图标：`liangzu`（梁祖，默认）/ `whale-girl`（鲸鱼娘）/ `deepseek`（DeepSeek 鲸鱼）/ 自定义 `.ico` 的绝对路径；托盘右键「切换图标」会写这个字段 |
 | `shortcut` | 桌面快捷方式路径，切图标时用它同步快捷方式图标 |
 

@@ -122,6 +122,8 @@ $pickIcon = ''
 $pickShortcut = ''
 $cwd = ''
 $pickBrowserMode = ''
+$pickUiWindowFixed = ''
+$pickUiWindowSize = ''
 $pickPluginVersion = ''
 
 # 复用摘要里的"忽略"原因（不用三元运算符：Windows PowerShell 5.1 不支持）
@@ -151,6 +153,14 @@ if ($existing) {
     # browserMode：只认 app / web 两个合法值（-eq 不区分大小写），其余一律忽略、回落默认 app
     $v = Get-Prop $existing 'browserMode'
     if ($v -eq 'app' -or $v -eq 'web') { $pickBrowserMode = $v; $reuse['browserMode'] = $v } else { $reuse['browserMode'] = Get-SkipReason $v }
+
+    # uiWindowFixed：只认 on / off 两个合法值，其余一律忽略、回落默认 on
+    $v = Get-Prop $existing 'uiWindowFixed'
+    if ($v -eq 'on' -or $v -eq 'off') { $pickUiWindowFixed = $v; $reuse['uiWindowFixed'] = $v } else { $reuse['uiWindowFixed'] = Get-SkipReason $v }
+
+    # uiWindowSize：格式 WxH（宽高各 2-5 位数字，支持 x/X/逗号分隔），合法就沿用，其余忽略、回落默认半屏
+    $v = Get-Prop $existing 'uiWindowSize'
+    if ($v -match '^\d{2,5}\s*[xX,，\s]\s*\d{2,5}$') { $pickUiWindowSize = $v; $reuse['uiWindowSize'] = $v } else { $reuse['uiWindowSize'] = Get-SkipReason $v }
 
     # icon：预设名要求图标文件在安装目录里；自定义图标要求文件存在
     $v = Get-Prop $existing 'icon'
@@ -491,6 +501,8 @@ $cfg = [ordered]@{
     node          = $nodePath
     url           = if ($pickUrl) { $pickUrl } else { 'http://127.0.0.1:3080' }
     browserMode   = if ($pickBrowserMode) { $pickBrowserMode } else { 'app' }
+    uiWindowFixed = if ($pickUiWindowFixed) { $pickUiWindowFixed } else { 'on' }
+    uiWindowSize  = if ($pickUiWindowSize) { $pickUiWindowSize } else { '' }
     icon          = $iconSetting
     shortcut      = $lnkPath
     cwd           = $cwd

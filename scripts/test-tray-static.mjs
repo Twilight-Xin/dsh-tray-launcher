@@ -156,6 +156,13 @@ check("安装器写入 browserMode 配置", inst.includes("browserMode   = if ($
 check("安装器复用已有 browserMode", inst.includes("$reuse['browserMode'] = $v") && inst.includes("$reuse['browserMode'] = Get-SkipReason"));
 check("托盘有界面打开方式勾选菜单", tray.includes("用 Edge 应用窗口打开界面") && tray.includes("$script:miUiMode.Checked = ($script:browserMode -eq 'app')"));
 check("菜单切换立即写配置并同步勾选", tray.includes("Save-CfgValue 'browserMode' $script:browserMode") && tray.includes("browserMode switched to app via menu") && tray.includes("browserMode switched to web via menu"));
+check("uiWindowFixed 缺失/非法回落默认 on", tray.includes("Get-CfgValue 'uiWindowFixed' 'on'") && tray.includes("if ($script:uiWindowFixed -ne 'on' -and $script:uiWindowFixed -ne 'off')"));
+check("app 模式拼入窗口尺寸参数（uiWindowFixed=on 时）", tray.includes("Get-UiWindowArgs") && tray.includes("'--window-size=' + $w + ',' + $h + ' --window-position=' + $x + ',' + $y"));
+check("安装器写入 uiWindowFixed/uiWindowSize", inst.includes("uiWindowFixed = if ($pickUiWindowFixed)") && inst.includes("uiWindowSize  = if ($pickUiWindowSize)"));
+check("安装器复用已有 uiWindowFixed", inst.includes("$reuse['uiWindowFixed'] = $v") && inst.includes("$reuse['uiWindowFixed'] = Get-SkipReason"));
+check("安装器复用已有 uiWindowSize", inst.includes("$reuse['uiWindowSize'] = $v") && inst.includes("$reuse['uiWindowSize'] = Get-SkipReason"));
+check("托盘有固定窗口尺寸勾选菜单", tray.includes("固定窗口尺寸（半屏居中）") && tray.includes("$script:miWinFixed.Checked = ($script:uiWindowFixed -eq 'on')"));
+check("菜单切换固定窗口立即写配置并同步勾选", tray.includes("Save-CfgValue 'uiWindowFixed' $script:uiWindowFixed") && tray.includes("uiWindowFixed switched to on via menu") && tray.includes("uiWindowFixed switched to off via menu"));
 
 if (failed > 0) {
   console.error(`\n${failed} 项静态检查未通过`);

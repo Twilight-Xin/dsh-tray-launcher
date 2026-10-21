@@ -47,6 +47,12 @@ $cwd = Get-CfgValue 'cwd' $env:USERPROFILE
 # 'web' = 系统默认浏览器开普通网页。配置缺失、拼写非法一律按 'app'（用户要求的缺省值）。
 $script:browserMode = ('' + (Get-CfgValue 'browserMode' 'app')).Trim().ToLower()
 if ($script:browserMode -ne 'app' -and $script:browserMode -ne 'web') { $script:browserMode = 'app' }
+# 固定窗口尺寸/位置开关：'on'（缺省）= 每次打开 app 窗口都强制半屏（或 uiWindowSize）居中，
+# 'off' = 交给 Edge 自己记住的上次窗口尺寸。配置缺失/非法一律按 'on'（用户要求的缺省值）。
+$script:uiWindowFixed = ('' + (Get-CfgValue 'uiWindowFixed' 'on')).Trim().ToLower()
+if ($script:uiWindowFixed -ne 'on' -and $script:uiWindowFixed -ne 'off') { $script:uiWindowFixed = 'on' }
+# 固定尺寸数值：格式 WxH（如 1280x720，x/X/逗号/空格分隔都认）；缺失/非法 → 回落屏幕工作区一半
+$script:uiWindowSize = ('' + (Get-CfgValue 'uiWindowSize' '')).Trim()
 # Web 端口：从配置 url 里解析（杀 3080 监听者、重启前等端口都用它；缺省 3080）
 $script:webPort = 3080
 if ($url -match '://[^/]+:(\d+)') { $script:webPort = [int]$Matches[1] }
@@ -309,6 +315,35 @@ function Find-EdgeExe {
     return $null
 }
 
+# 构造 Edge 的窗口尺寸/位置参数（--window-size=WxH --window-position=X,Y）。
+# 只在 uiWindowFixed=on 时生效：uiWindowSize 缺失/非法 → 屏幕工作区宽高各一半，永远居中显示。
+# 这两个参数是 Chromium 原生支持的命令行开关，优先级高于 Edge 自己记住的 app_window_placement，
+# 所以不管 Edge 之前把窗口记成什么样，这里每次打开都强制用配置值。
+function Get-UiWindowArgs {
+    if ($script:uiWindowFixed -ne 'on') { return '' }
+    # 屏幕工作区（去掉任务栏）；多显示器只看主屏，够用
+    Add-Type -AssemblyName System.Windows.Forms
+    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    # 解析 uiWindowSize：支持 "1280x720" / "1280,720" / "1280 720"
+    $w = 0; $h = 0
+    if ($script:uiWindowSize -match '^(\d{2,5})\s*[xX,，\s]\s*(\d{2,5})$') {
+        $w = [int]$Matches[1]
+        $h = [int]$Matches[2]
+    }
+    if ($w -le 0 -or $h -le 0) {
+        # 默认：屏幕工作区宽高各一半（用户要求的缺省值）
+        $w = [int]($wa.Width / 2)
+        $h = [int]($wa.Height / 2)
+    }
+    # 钳制：配置的尺寸不能超过工作区，否则 --window-position 会算出负坐标、窗口被推出屏幕
+    if ($w -gt $wa.Width) { $w = $wa.Width }
+    if ($h -gt $wa.Height) { $h = $wa.Height }
+    # 居中：屏幕中央显示（不管工作区偏移，都以主屏为准）
+    $x = $wa.Left + [int](($wa.Width - $w) / 2)
+    $y = $wa.Top + [int](($wa.Height - $h) / 2)
+    return ('--window-size=' + $w + ',' + $h + ' --window-position=' + $x + ',' + $y)
+}
+
 function Open-HarnessUi {
     $u = Get-HarnessUrl
     if ($script:browserMode -eq 'web') {
@@ -320,8 +355,12 @@ function Open-HarnessUi {
     if ($edge) {
         # 引号必须加：带 token 的地址含 &，Start-Process 走 ShellExecute，
         # 不包起来查询串会被拆成多个参数，app 窗口打开的就是残缺地址。
-        Start-Process -FilePath $edge -ArgumentList ('--app="' + $u + '"')
-        Write-TrayLog 'ui opened in edge app mode (browserMode=app)'
+        $arg = '--app="' + $u + '"'
+        $winArg = Get-UiWindowArgs
+        if ($winArg) { $arg += ' ' + $winArg }
+        Start-Process -FilePath $edge -ArgumentList $arg
+        if ($winArg) { Write-TrayLog ('ui opened in edge app mode with fixed window (' + $winArg + ')') }
+        else { Write-TrayLog 'ui opened in edge app mode (browserMode=app, uiWindowFixed=off)' }
     } else {
         # 机器上没有 Edge：退回默认浏览器，总比点了没反应强
         Start-Process $u
@@ -790,6 +829,26 @@ $script:miUiMode.add_Click({
     }
 })
 $menu.Items.Add($script:miUiMode) | Out-Null
+
+# 固定窗口尺寸勾选菜单：勾选 = 开（uiWindowFixed=on，打开即半屏居中），取消 = 关（交给 Edge 记忆）。
+# 与 browserMode 同理：$script:uiWindowFixed 是唯一开关来源，Open-HarnessUi 每次都读它，
+# 切完立即生效、下次「打开界面」就按新设置走。
+$script:miWinFixed = New-Object System.Windows.Forms.ToolStripMenuItem('固定窗口尺寸（半屏居中）')
+$script:miWinFixed.CheckOnClick = $false
+$script:miWinFixed.Checked = ($script:uiWindowFixed -eq 'on')
+$script:miWinFixed.add_Click({
+    if ($script:uiWindowFixed -eq 'on') { $script:uiWindowFixed = 'off' } else { $script:uiWindowFixed = 'on' }
+    Save-CfgValue 'uiWindowFixed' $script:uiWindowFixed
+    $script:miWinFixed.Checked = ($script:uiWindowFixed -eq 'on')
+    if ($script:uiWindowFixed -eq 'on') {
+        Write-TrayLog 'uiWindowFixed switched to on via menu'
+        Show-TrayBalloon '已开启固定窗口尺寸（半屏居中，写入 uiWindowFixed=on）' ([System.Windows.Forms.ToolTipIcon]::Info)
+    } else {
+        Write-TrayLog 'uiWindowFixed switched to off via menu'
+        Show-TrayBalloon '已关闭固定窗口尺寸（交给 Edge 记忆，写入 uiWindowFixed=off）' ([System.Windows.Forms.ToolTipIcon]::Info)
+    }
+})
+$menu.Items.Add($script:miWinFixed) | Out-Null
 
 # 开机自启（勾选 = 启动文件夹里有快捷方式；点击即切换）
 function Get-ShortcutPath {
