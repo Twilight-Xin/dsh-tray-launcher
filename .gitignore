@@ -1,5 +1,6 @@
 logs/
 dsh-tray.config.json
+edge-profile/
 *.log
 *.lnk
 debug/

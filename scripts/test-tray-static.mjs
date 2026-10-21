@@ -163,6 +163,9 @@ check("安装器复用已有 uiWindowFixed", inst.includes("$reuse['uiWindowFixe
 check("安装器复用已有 uiWindowSize", inst.includes("$reuse['uiWindowSize'] = $v") && inst.includes("$reuse['uiWindowSize'] = Get-SkipReason"));
 check("托盘有固定窗口尺寸勾选菜单", tray.includes("固定窗口尺寸（半屏居中）") && tray.includes("$script:miWinFixed.Checked = ($script:uiWindowFixed -eq 'on')"));
 check("菜单切换固定窗口立即写配置并同步勾选", tray.includes("Save-CfgValue 'uiWindowFixed' $script:uiWindowFixed") && tray.includes("uiWindowFixed switched to on via menu") && tray.includes("uiWindowFixed switched to off via menu"));
+check("app 模式用私有 --user-data-dir（否则 --window-size 被已运行进程丢弃）", tray.includes(`' --user-data-dir="' + $profileDir + '" --no-first-run --disable-background-mode'`) && tray.includes("function Get-EdgeProfileDir"));
+check("私有 profile 目录固定在安装目录子目录 edge-profile", tray.includes("return (Join-Path $script:dataDir 'edge-profile')"));
+check("卸载前关掉占用 profile 的 Edge 进程（否则删目录失败）", uninstall.includes("edge-profile") && uninstall.includes("$edgeProfileDir + '*'"));
 
 if (failed > 0) {
   console.error(`\n${failed} 项静态检查未通过`);

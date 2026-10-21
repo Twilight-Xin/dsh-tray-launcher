@@ -61,6 +61,25 @@ if ($trayProcs) {
     Write-Host '没有正在运行的托盘进程'
 }
 
+# ---- 1b) 关掉用安装目录私有 profile 的 Edge app 窗口 ----
+# app 窗口用 --user-data-dir 指向 <安装目录>\edge-profile，那些 Edge 进程会锁住该目录，
+# 不先关掉的话第 4 步删除安装目录会失败（文件被占用）。只杀命令行里带这个目录的 msedge，
+# 用户自己开着的主 Edge 完全不受影响。
+$edgeProfileDir = Join-Path $InstallDir 'edge-profile'
+if (Test-Path $edgeProfileDir) {
+    $edgeProcs = Get-CimInstance Win32_Process -Filter "Name = 'msedge.exe'" |
+        Where-Object { $_.CommandLine -like ('*' + $edgeProfileDir + '*') }
+    if ($edgeProcs) {
+        foreach ($p in $edgeProcs) {
+            if ($DryRun) { Write-Host ('将结束 app 窗口 Edge 进程 PID ' + $p.ProcessId) }
+            else { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+        }
+        if (-not $DryRun) { Start-Sleep -Milliseconds 800 }
+    } else {
+        Write-Host '没有正在运行的 app 窗口 Edge 进程'
+    }
+}
+
 # ---- 2) 注销用量仪表（放在删除安装目录之前：注册里存的路径就在安装目录下）----
 $usageMeterCleanupOk = $true
 if ($KeepUsageMeter) {

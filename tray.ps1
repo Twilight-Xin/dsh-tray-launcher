@@ -344,6 +344,13 @@ function Get-UiWindowArgs {
     return ('--window-size=' + $w + ',' + $h + ' --window-position=' + $x + ',' + $y)
 }
 
+# app 窗口专用私有 profile 目录：固定在安装目录（$script:dataDir）下的 edge-profile 子目录。
+# 用独立 profile 的唯一目的是让 --window-size/--window-position 生效（见 Open-HarnessUi 注释）；
+# 卸载时 uninstall.ps1 会连这个目录一起删掉。
+function Get-EdgeProfileDir {
+    return (Join-Path $script:dataDir 'edge-profile')
+}
+
 function Open-HarnessUi {
     $u = Get-HarnessUrl
     if ($script:browserMode -eq 'web') {
@@ -356,6 +363,14 @@ function Open-HarnessUi {
         # 引号必须加：带 token 的地址含 &，Start-Process 走 ShellExecute，
         # 不包起来查询串会被拆成多个参数，app 窗口打开的就是残缺地址。
         $arg = '--app="' + $u + '"'
+        # 私有 profile：--window-size/--window-position 只在"全新启动的进程"里才会被解析。
+        # 用户日常开着主 Edge 时，msedge --app= 会把整条命令行转发给已在运行的进程，
+        # 转发时这些开关被直接丢弃（实测：默认 profile 下尺寸参数无效，窗口仍按
+        # Edge 记忆的 app_window_placement 开）。--user-data-dir 指向安装目录下的私有目录
+        # 会强制起一个独立进程，开关才真正生效。--disable-background-mode 保证关窗即整树退出，
+        # 不让后台进程常驻——否则下次打开又变成转发、参数再次失效。
+        $profileDir = Get-EdgeProfileDir
+        $arg += ' --user-data-dir="' + $profileDir + '" --no-first-run --disable-background-mode'
         $winArg = Get-UiWindowArgs
         if ($winArg) { $arg += ' ' + $winArg }
         Start-Process -FilePath $edge -ArgumentList $arg
